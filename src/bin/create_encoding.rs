@@ -21,6 +21,26 @@ fn main() -> anyhow::Result<()> {
     let text = std::fs::read_to_string(&args.input)
         .with_context(|| format!("Failed to read contents {:?} to string", args.input))?;
 
+    let encoding = null_encoding(&text);
+
+    if let Some(ref output) = args.output {
+        serde_json::to_writer(
+            BufWriter::new(
+                File::create(output)
+                    .with_context(|| format!("Failed to create output file: {output:?}"))?,
+            ),
+            &encoding,
+        )
+        .context("Failed to encode encoding to JSON")?;
+    } else {
+        let json = serde_json::to_string(&encoding).context("Failed to encode encoding to JSON")?;
+        println!("{json}");
+    }
+
+    Ok(())
+}
+
+fn null_encoding(text: &str) -> Encoding<String> {
     let mut encoding = Encoding {
         encoding: vec![],
         tokens: vec![],
@@ -40,6 +60,12 @@ fn main() -> anyhow::Result<()> {
         };
         encoding.encoding.push(e);
     }
+
+    encoding
+}
+
+fn encode_with_iterative_run_compression(text: &str) -> Encoding<String> {
+    let mut encoding = null_encoding(text);
 
     while let Some(to_encode) = find_max_compressable_seq(&encoding.encoding) {
         let to_encode_indices: Vec<_> = encoding
@@ -79,21 +105,7 @@ fn main() -> anyhow::Result<()> {
         encoding.encoding = new_encoding;
     }
 
-    if let Some(ref output) = args.output {
-        serde_json::to_writer(
-            BufWriter::new(
-                File::create(output)
-                    .with_context(|| format!("Failed to create output file: {output:?}"))?,
-            ),
-            &encoding,
-        )
-        .context("Failed to encode encoding to JSON")?;
-    } else {
-        let json = serde_json::to_string(&encoding).context("Failed to encode encoding to JSON")?;
-        println!("{json}");
-    }
-
-    Ok(())
+    encoding
 }
 
 fn find_max_compressable_seq<T>(seq: &[T]) -> Option<&[T]>
