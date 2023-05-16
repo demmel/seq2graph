@@ -2,19 +2,31 @@ use std::collections::{hash_map::Entry, HashMap};
 use std::fs::File;
 use std::hash::Hash;
 use std::io::BufWriter;
+use std::path::PathBuf;
+
+use clap::Parser;
 
 use seq2graph::Encoding;
 
-const TEXT: &str = include_str!("../test.txt");
+#[derive(Parser)]
+struct Args {
+    input: PathBuf,
+    output: Option<PathBuf>,
+}
 
 fn main() {
+    let args = Args::parse();
+
+    let text = std::fs::read_to_string(args.input)
+        .expect("should be able to read contents of file to string");
+
     let mut encoding = Encoding {
         encoding: vec![],
         tokens: vec![],
     };
 
     let mut tok2enc = HashMap::new();
-    for c in TEXT.chars() {
+    for c in text.chars() {
         let s = c.to_string();
         let e = match tok2enc.entry(s.clone()) {
             Entry::Occupied(e) => *e.get(),
@@ -64,29 +76,30 @@ fn main() {
             encoding.encoding.len() - new_encoding.len()
         );
         encoding.encoding = new_encoding;
+    }
 
-        serde_json::to_writer(
-            BufWriter::new(File::create("test.json").unwrap()),
-            &encoding,
-        )
-        .unwrap();
+    if let Some(ref output) = args.output {
+        serde_json::to_writer(BufWriter::new(File::create(output).unwrap()), &encoding).unwrap();
+    } else {
+        let json = serde_json::to_string(&encoding).unwrap();
+        println!("{json}");
     }
 }
 
-fn find_max_compressable_seq<T>(text: &[T]) -> Option<&[T]>
+fn find_max_compressable_seq<T>(seq: &[T]) -> Option<&[T]>
 where
     T: Eq + Hash,
 {
     let mut tokens = HashMap::new();
-    let max_len = text.len() / 2;
+    let max_len = seq.len() / 2;
 
     for l in 2..max_len {
         let mut found = false;
 
-        let max_start = text.len() - l;
+        let max_start = seq.len() - l;
         for start in 0..=max_start {
             let end = start + l;
-            let snippet = &text[start..end];
+            let snippet = &seq[start..end];
             match tokens.entry(snippet) {
                 Entry::Occupied(mut e) => {
                     let (count, last) = e.get_mut();
