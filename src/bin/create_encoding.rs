@@ -4,6 +4,7 @@ use std::hash::Hash;
 use std::io::BufWriter;
 use std::path::PathBuf;
 
+use anyhow::Context;
 use clap::Parser;
 
 use seq2graph::Encoding;
@@ -14,11 +15,11 @@ struct Args {
     output: Option<PathBuf>,
 }
 
-fn main() {
+fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
-    let text = std::fs::read_to_string(args.input)
-        .expect("should be able to read contents of file to string");
+    let text = std::fs::read_to_string(&args.input)
+        .with_context(|| format!("Failed to read contents {:?} to string", args.input))?;
 
     let mut encoding = Encoding {
         encoding: vec![],
@@ -79,11 +80,20 @@ fn main() {
     }
 
     if let Some(ref output) = args.output {
-        serde_json::to_writer(BufWriter::new(File::create(output).unwrap()), &encoding).unwrap();
+        serde_json::to_writer(
+            BufWriter::new(
+                File::create(output)
+                    .with_context(|| format!("Failed to create output file: {output:?}"))?,
+            ),
+            &encoding,
+        )
+        .context("Failed to encode encoding to JSON")?;
     } else {
-        let json = serde_json::to_string(&encoding).unwrap();
+        let json = serde_json::to_string(&encoding).context("Failed to encode encoding to JSON")?;
         println!("{json}");
     }
+
+    Ok(())
 }
 
 fn find_max_compressable_seq<T>(seq: &[T]) -> Option<&[T]>
