@@ -1,7 +1,14 @@
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+pub mod wasm;
+
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+pub use wasm::*;
+
 use std::{
     collections::{hash_map::Entry, HashMap, HashSet},
     fmt::Display,
     hash::Hash,
+    str::Chars,
 };
 
 use anyhow::anyhow;
@@ -11,9 +18,39 @@ use tabbycat::{
 };
 
 #[derive(Serialize, Deserialize)]
-pub struct Encoding<T> {
+pub struct Encoding<T: TokenIter> {
     pub encoding: Vec<usize>,
     pub tokens: Vec<T>,
+}
+
+pub trait TokenIter
+where
+    Self: FromIterator<Self::Item>,
+{
+    type Item;
+    type Iter<'a>: Iterator<Item = Self::Item>
+    where
+        Self: 'a;
+
+    fn token_iter(&self) -> Self::Iter<'_>;
+}
+
+impl TokenIter for String {
+    type Item = char;
+    type Iter<'a> = Chars<'a>;
+
+    fn token_iter(&self) -> Self::Iter<'_> {
+        self.chars()
+    }
+}
+
+impl<T: TokenIter> Encoding<T> {
+    fn collapse_tokens(&self, to_encode: &[usize]) -> T {
+        to_encode
+            .iter()
+            .flat_map(|i| self.tokens[*i].token_iter())
+            .collect()
+    }
 }
 
 pub fn null_encoding(text: &str) -> Encoding<String> {
@@ -42,46 +79,18 @@ pub fn null_encoding(text: &str) -> Encoding<String> {
 
 pub fn encode_with_iterative_run_compression(text: &str) -> Encoding<String> {
     let mut encoding = null_encoding(text);
-
-    while let Some(to_encode) = find_max_compressable_seq(&encoding.encoding) {
-        let to_encode_indices: Vec<_> = encoding
-            .encoding
-            .windows(to_encode.len())
-            .enumerate()
-            .filter(|(_, v)| *v == to_encode)
-            .map(|(i, _)| i)
-            .collect();
-
-        encoding.tokens.push(
-            to_encode
-                .iter()
-                .flat_map(|i| encoding.tokens[*i].chars())
-                .collect(),
-        );
-        println!("{}", encoding.tokens.last().unwrap());
-        let e = encoding.tokens.len() - 1;
-
-        let mut new_encoding = Vec::with_capacity(encoding.encoding.len());
-        let mut prev = 0;
-        for i in to_encode_indices {
-            if i < prev {
-                continue;
-            }
-            new_encoding.extend_from_slice(&encoding.encoding[prev..i]);
-            new_encoding.push(e);
-            prev = i + to_encode.len();
-        }
-        new_encoding.extend_from_slice(&encoding.encoding[prev..]);
-        println!(
-            "{} -> {} ({})",
-            encoding.encoding.len(),
-            new_encoding.len(),
-            encoding.encoding.len() - new_encoding.len()
-        );
-        encoding.encoding = new_encoding;
-    }
-
+    while encode_with_run_compression(&mut encoding) {}
     encoding
+}
+
+pub fn encode_with_run_compression(encoding: &mut Encoding<String>) -> bool {
+    let to_encode = if let Some(to_encode) = find_max_compressable_seq(&encoding.encoding) {
+        to_encode.to_vec()
+    } else {
+        return false;
+    };
+    collapse_encoding(encoding, &to_encode);
+    true
 }
 
 pub fn find_max_compressable_seq<T>(seq: &[T]) -> Option<&[T]>
@@ -126,7 +135,7 @@ where
 
 pub fn create_encoding_graph<T>(encoding: &Encoding<T>) -> anyhow::Result<Graph>
 where
-    T: Display,
+    T: TokenIter + Display,
 {
     let seen: HashSet<_> = encoding.encoding.iter().cloned().collect();
 
@@ -160,4 +169,39 @@ where
         .map_err(|e| anyhow!(e))?;
 
     Ok(graph)
+}
+
+pub fn collapse_encoding<T>(encoding: &mut Encoding<T>, to_encode: &[usize])
+where
+    T: TokenIter,
+{
+    let to_encode_indices: Vec<_> = encoding
+        .encoding
+        .windows(to_encode.len())
+        .enumerate()
+        .filter(|(_, v)| *v == to_encode)
+        .map(|(i, _)| i)
+        .collect();
+
+    encoding.tokens.push(encoding.collapse_tokens(&to_encode));
+    let e = encoding.tokens.len() - 1;
+
+    let mut new_encoding = Vec::with_capacity(encoding.encoding.len());
+    let mut prev = 0;
+    for i in to_encode_indices {
+        if i < prev {
+            continue;
+        }
+        new_encoding.extend_from_slice(&encoding.encoding[prev..i]);
+        new_encoding.push(e);
+        prev = i + to_encode.len();
+    }
+    new_encoding.extend_from_slice(&encoding.encoding[prev..]);
+    println!(
+        "{} -> {} ({})",
+        encoding.encoding.len(),
+        new_encoding.len(),
+        encoding.encoding.len() - new_encoding.len()
+    );
+    encoding.encoding = new_encoding;
 }
